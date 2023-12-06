@@ -37,7 +37,7 @@ public class Configuration {
     private String getEnvironmentVariable(final String key, final @Nullable String defaultValue) {
         final String filePath = System.getenv(key + "_FILE");
         if (filePath != null)
-            return ExceptionUtil.wrap(IOException.class, () -> Files.readString(Path.of(filePath)), e -> new UncheckedIOException("Failed to read secret file", e));
+            return ExceptionUtil.wrap(IOException.class, () -> Files.readString(Path.of(filePath)).trim(), e -> new UncheckedIOException("Failed to read secret file", e));
         final String value = System.getenv(key);
         if (value != null)
             return value;

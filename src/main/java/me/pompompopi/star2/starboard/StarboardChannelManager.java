@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Optional;
 
 public final class StarboardChannelManager {
-    private static final int FUNCTIONAL_EMBED_LIMIT = 4095;
     private final DatabaseConnection databaseConnection;
     private final TextChannel starboardChannel;
     private final String starRaw;

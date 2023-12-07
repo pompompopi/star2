@@ -88,7 +88,7 @@ public final class StarboardChannelManager {
         final StringBuilder descriptionBuilder = new StringBuilder();
         if (!attachments.isEmpty()) {
             final StringBuilder attachmentAdditionBuilder = new StringBuilder();
-            builder.setImage(attachments.get(0).getUrl());
+            builder.setImage(attachments.getFirst().getUrl());
             if (attachments.size() > 1) {
                 final int maxAttachmentIdx = attachments.size() - 1;
                 for (int i = 1; i < attachments.size(); i++) {

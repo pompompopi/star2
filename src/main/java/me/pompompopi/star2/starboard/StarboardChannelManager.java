@@ -26,7 +26,7 @@ public final class StarboardChannelManager {
     }
 
     private CompletableFuture<Void> createEntry(final Message message, final short stars) {
-        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, stars)).queue(starboardMessage -> databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), starboardMessage.getIdLong(), stars)));
+        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, stars)).queue(starboardMessage -> databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), message.getAuthor().getIdLong(), starboardMessage.getIdLong(), stars)));
     }
 
     private CompletableFuture<Void> updateEntry(final Message message, final short stars, final DatabaseRow databaseRow) {
@@ -71,6 +71,17 @@ public final class StarboardChannelManager {
             final DatabaseRow databaseRow = databaseRowOpt.get();
             starboardChannel.deleteMessageById(databaseRow.starboardMessageId()).queue();
             return true;
+        });
+    }
+
+    public CompletableFuture<Void> updateEveryUserEntry(final JDA jda, final long userId) {
+        return databaseConnection.getUserBoardEntries(userId).thenAcceptAsync(rows -> {
+            for (final DatabaseRow row : rows) {
+                final TextChannel textChannel = jda.getTextChannelById(row.originalChannelId());
+                if (textChannel == null)
+                    return;
+                textChannel.retrieveMessageById(row.originalMessageId()).queue(message -> updateEntry(message, (short) -1, row));
+            }
         });
     }
 

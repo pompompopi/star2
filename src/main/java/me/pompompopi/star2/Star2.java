@@ -7,6 +7,7 @@ import me.pompompopi.star2.util.ExceptionUtil;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.MessageReaction;
+import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.entities.emoji.UnicodeEmoji;
 import net.dv8tion.jda.api.events.message.MessageBulkDeleteEvent;
@@ -16,8 +17,12 @@ import net.dv8tion.jda.api.events.message.react.MessageReactionAddEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionRemoveAllEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionRemoveEmojiEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionRemoveEvent;
+import net.dv8tion.jda.api.events.user.update.GenericUserUpdateEvent;
+import net.dv8tion.jda.api.events.user.update.UserUpdateAvatarEvent;
+import net.dv8tion.jda.api.events.user.update.UserUpdateNameEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,10 +46,11 @@ public final class Star2 extends ListenerAdapter {
             throw new IllegalStateException("Failed to connect to database", e);
         }
         Runtime.getRuntime().addShutdownHook(new Thread(databaseConnection::shutdown));
-        final JDA jda = JDABuilder.create(configuration.getToken(), GatewayIntent.GUILD_MESSAGE_REACTIONS, GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
+        final JDA jda = JDABuilder.create(configuration.getToken(), GatewayIntent.GUILD_MESSAGE_REACTIONS, GatewayIntent.GUILD_MESSAGES, GatewayIntent.GUILD_MEMBERS, GatewayIntent.MESSAGE_CONTENT)
                 .addEventListeners(this)
                 .build();
         jda.awaitReady();
+        this.databaseConnection.performMigration(jda);
         this.starboardChannelManager = new StarboardChannelManager(jda, configuration, databaseConnection);
         this.starboardChannelId = configuration.getStarboardChannel();
         this.minimumStars = configuration.getMinimumReactions();
@@ -137,5 +143,27 @@ public final class Star2 extends ListenerAdapter {
     public void onMessageBulkDelete(final MessageBulkDeleteEvent event) {
         final Function<Long, CompletableFuture<?>> messageIdFunc = event.getChannel().getIdLong() == starboardChannelId ? databaseConnection::removeBoardEntry : starboardChannelManager::removeEntry;
         ExceptionUtil.handleExceptionAndLog(CompletableFuture.allOf(event.getMessageIds().stream().map(Long::parseUnsignedLong).map(messageIdFunc).toArray(CompletableFuture[]::new)), "message bulk delete event handler");
+    }
+
+    private void onDisplayedUserInfoUpdate(final GenericUserUpdateEvent<?> event) {
+        final User user = event.getUser();
+        if (user.isBot())
+            return;
+        final long userId = user.getIdLong();
+        ExceptionUtil.handleExceptionAndLog(databaseConnection.userHasBoardEntry(userId).thenAcceptAsync(hasBoardEntry -> {
+            if (!hasBoardEntry)
+                return;
+            starboardChannelManager.updateEveryUserEntry(event.getJDA(), userId);
+        }), "displayed user info update");
+    }
+
+    @Override
+    public void onUserUpdateAvatar(@NotNull final UserUpdateAvatarEvent event) {
+        onDisplayedUserInfoUpdate(event);
+    }
+
+    @Override
+    public void onUserUpdateName(@NotNull final UserUpdateNameEvent event) {
+        onDisplayedUserInfoUpdate(event);
     }
 }

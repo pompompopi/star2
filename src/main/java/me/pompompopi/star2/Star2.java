@@ -82,7 +82,7 @@ public final class Star2 extends ListenerAdapter {
             if (starCount < minimumStars)
                 return;
 
-            ExceptionUtil.handleException(this.starboardChannelManager.updateOrCreateEntry(message, (short) starCount), e -> LOGGER.error("Exception occurred while updating starboard entry in message reaction add", e));
+            ExceptionUtil.handleExceptionAndLog(this.starboardChannelManager.updateOrCreateEntry(message, (short) starCount), "message reaction add event");
         }, e -> LOGGER.warn("Failed to process message reaction add", e));
     }
 
@@ -97,7 +97,7 @@ public final class Star2 extends ListenerAdapter {
             final int starCount = messageReaction == null ? 0 : messageReaction.getCount();
             if (starCount >= minimumStars)
                 return;
-            ExceptionUtil.handleException(this.starboardChannelManager.removeEntry(event.getMessageIdLong()), e -> LOGGER.error("Exception occurred while removing starboard entry in message reaction remove", e));
+            ExceptionUtil.handleExceptionAndLog(this.starboardChannelManager.removeEntry(event.getMessageIdLong()), "message reaction remove event");
         }, e -> LOGGER.warn("Failed to process message reaction remove", e));
     }
 

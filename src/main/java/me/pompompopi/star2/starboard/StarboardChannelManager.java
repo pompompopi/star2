@@ -34,7 +34,7 @@ public final class StarboardChannelManager {
             final long originalMessageId = message.getIdLong();
             if (stars != -1) {
                 if (stars != databaseRow.stars())
-                    databaseConnection.updateStars(originalMessageId, stars);
+                    databaseConnection.updateStars(originalMessageId, stars).join();
             }
             starboardChannel.editMessageEmbedsById(databaseRow.starboardMessageId(), createEmbed(message, stars == -1 ? databaseRow.stars() : stars)).queue();
         });

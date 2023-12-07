@@ -1,6 +1,10 @@
 package me.pompompopi.star2.util;
 
+import me.pompompopi.star2.Star2;
+
 import java.util.Arrays;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 public final class ExceptionUtil {
@@ -30,6 +34,18 @@ public final class ExceptionUtil {
                 throw (RuntimeException) ex;
             throw new RuntimeException(ex);
         }
+    }
+
+    public static <T> CompletableFuture<T> handleException(final CompletableFuture<T> completableFuture, final Consumer<Throwable> handler) {
+        return completableFuture.whenCompleteAsync((r, t) -> {
+            if (t == null)
+                return;
+            handler.accept(t);
+        });
+    }
+    
+    public static <T> CompletableFuture<T> handleExceptionAndLog(final CompletableFuture<T> completableFuture, final String where) {
+        return handleException(completableFuture, t -> Star2.LOGGER.error("An exception occurred in {}", where, t));
     }
 
     @SafeVarargs

@@ -9,11 +9,10 @@ import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
-import net.dv8tion.jda.api.exceptions.RateLimitedException;
 
-import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 public final class StarboardChannelManager {
     private final DatabaseConnection databaseConnection;
@@ -26,49 +25,53 @@ public final class StarboardChannelManager {
         this.starRaw = configuration.getStarEmoji();
     }
 
-    private void createEntry(final Message message, final short stars) throws RateLimitedException, SQLException {
-        final Message starboardMessage = starboardChannel.sendMessageEmbeds(createEmbed(message, stars)).complete(true);
-        databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), starboardMessage.getIdLong(), stars);
+    private CompletableFuture<Void> createEntry(final Message message, final short stars) {
+        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, stars)).queue(starboardMessage -> databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), starboardMessage.getIdLong(), stars)));
     }
 
-    private boolean updateEntry(final Message message, short stars, final DatabaseRow databaseRow) throws RateLimitedException, SQLException {
-        final long originalMessageId = message.getIdLong();
-        if (stars != -1) {
-            if (stars != databaseRow.stars())
-                databaseConnection.updateStars(originalMessageId, stars);
-        } else {
-            stars = databaseRow.stars();
-        }
-        starboardChannel.editMessageEmbedsById(databaseRow.starboardMessageId(), createEmbed(message, stars)).complete(true);
-        return true;
+    private CompletableFuture<Void> updateEntry(final Message message, final short stars, final DatabaseRow databaseRow) {
+        return CompletableFuture.runAsync(() -> {
+            final long originalMessageId = message.getIdLong();
+            if (stars != -1) {
+                if (stars != databaseRow.stars())
+                    databaseConnection.updateStars(originalMessageId, stars);
+            }
+            starboardChannel.editMessageEmbedsById(databaseRow.starboardMessageId(), createEmbed(message, stars == -1 ? databaseRow.stars() : stars)).queue();
+        });
     }
 
-    public boolean updateOrCreateEntry(final Message message, final short stars) throws RateLimitedException, SQLException {
+    public CompletableFuture<Boolean> updateOrCreateEntry(final Message message, final short stars) {
         return updateOrCreateEntry0(message, stars, true);
     }
 
-    public boolean updateWithoutCreatingEntry(final Message message, final short stars) throws RateLimitedException, SQLException {
+    public CompletableFuture<Boolean> updateWithoutCreatingEntry(final Message message, final short stars) {
         return updateOrCreateEntry0(message, stars, false);
     }
 
-    private boolean updateOrCreateEntry0(final Message message, final short stars, final boolean create) throws RateLimitedException, SQLException {
-        final Optional<DatabaseRow> databaseRowOpt = databaseConnection.getBoardEntry(message.getIdLong());
-        if (databaseRowOpt.isPresent())
-            return updateEntry(message, stars, databaseRowOpt.get());
-        if (!create)
-            return false;
+    private CompletableFuture<Boolean> updateOrCreateEntry0(final Message message, final short stars, final boolean create) {
+        return CompletableFuture.supplyAsync(() -> {
+            final Optional<DatabaseRow> databaseRowOpt = databaseConnection.getBoardEntry(message.getIdLong()).join();
+            if (databaseRowOpt.isPresent()) {
+                updateEntry(message, stars, databaseRowOpt.get()).join();
+                return true;
+            }
+            if (!create)
+                return false;
 
-        createEntry(message, stars);
-        return true;
+            createEntry(message, stars).join();
+            return true;
+        });
     }
 
-    public boolean removeEntry(final long originalMessageId) throws RateLimitedException, SQLException {
-        final Optional<DatabaseRow> databaseRowOpt = databaseConnection.removeBoardEntry(originalMessageId);
-        if (databaseRowOpt.isEmpty())
-            return false;
-        final DatabaseRow databaseRow = databaseRowOpt.get();
-        starboardChannel.deleteMessageById(databaseRow.starboardMessageId()).complete(true);
-        return true;
+    public CompletableFuture<Boolean> removeEntry(final long originalMessageId) {
+        return CompletableFuture.supplyAsync(() -> {
+            final Optional<DatabaseRow> databaseRowOpt = databaseConnection.removeBoardEntry(originalMessageId).join();
+            if (databaseRowOpt.isEmpty())
+                return false;
+            final DatabaseRow databaseRow = databaseRowOpt.get();
+            starboardChannel.deleteMessageById(databaseRow.starboardMessageId()).queue();
+            return true;
+        });
     }
 
     public MessageEmbed createEmbed(final Message message, final short stars) {

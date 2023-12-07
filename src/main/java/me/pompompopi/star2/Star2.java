@@ -6,7 +6,6 @@ import me.pompompopi.star2.starboard.StarboardChannelManager;
 import me.pompompopi.star2.util.ExceptionUtil;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
-import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageReaction;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.entities.emoji.UnicodeEmoji;
@@ -17,14 +16,15 @@ import net.dv8tion.jda.api.events.message.react.MessageReactionAddEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionRemoveAllEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionRemoveEmojiEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionRemoveEvent;
-import net.dv8tion.jda.api.exceptions.RateLimitedException;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
-import java.util.function.Consumer;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Function;
 
 public final class Star2 extends ListenerAdapter {
     public static final Logger LOGGER = LoggerFactory.getLogger("star2");
@@ -37,7 +37,7 @@ public final class Star2 extends ListenerAdapter {
     Star2(final Configuration configuration) throws InterruptedException {
         try {
             this.databaseConnection = new DatabaseConnection(configuration);
-        } catch (SQLException e) {
+        } catch (SQLException | ExecutionException e) {
             throw new IllegalStateException("Failed to connect to database", e);
         }
         Runtime.getRuntime().addShutdownHook(new Thread(databaseConnection::shutdown));
@@ -65,27 +65,18 @@ public final class Star2 extends ListenerAdapter {
             return;
         if (isNotStar(event.getEmoji()))
             return;
-        final Message message;
-        try {
-            message = event.retrieveMessage().complete(true);
-        } catch (RateLimitedException e) {
-            LOGGER.warn("Ratelimited", e);
-            return;
-        }
-        final MessageReaction reaction = message.getReaction(starEmoji);
-        if (reaction == null) {
-            LOGGER.warn("Reaction null while in the message reaction add event");
-            return;
-        }
-        final int starCount = reaction.getCount();
-        if (starCount < minimumStars)
-            return;
+        event.retrieveMessage().queue(message -> {
+            final MessageReaction reaction = message.getReaction(starEmoji);
+            if (reaction == null) {
+                LOGGER.warn("Reaction null while in the message reaction add event");
+                return;
+            }
+            final int starCount = reaction.getCount();
+            if (starCount < minimumStars)
+                return;
 
-        try {
-            this.starboardChannelManager.updateOrCreateEntry(message, (short) starCount);
-        } catch (RateLimitedException | SQLException e) {
-            throw new RuntimeException("Failed to add starboard entry", e);
-        }
+            ExceptionUtil.handleException(this.starboardChannelManager.updateOrCreateEntry(message, (short) starCount), e -> LOGGER.error("Exception occurred while updating starboard entry in message reaction add", e));
+        }, e -> LOGGER.warn("Failed to process message reaction add", e));
     }
 
     @Override
@@ -94,24 +85,13 @@ public final class Star2 extends ListenerAdapter {
             return;
         if (isNotStar(event.getEmoji()))
             return;
-        final Message message;
-        try {
-            message = event.retrieveMessage().complete(true);
-        } catch (RateLimitedException e) {
-            LOGGER.warn("Ratelimited", e);
-            return;
-        }
-        final MessageReaction messageReaction = message.getReaction(starEmoji);
-        final int starCount = messageReaction == null ? 0 : messageReaction.getCount();
-        if (starCount >= minimumStars)
-            return;
-        try {
-            this.starboardChannelManager.removeEntry(event.getMessageIdLong());
-        } catch (SQLException e) {
-            throw new IllegalStateException("Failed to remove starboard entry", e);
-        } catch (RateLimitedException e) {
-            LOGGER.warn("Ratelimited", e);
-        }
+        event.retrieveMessage().queue(message -> {
+            final MessageReaction messageReaction = message.getReaction(starEmoji);
+            final int starCount = messageReaction == null ? 0 : messageReaction.getCount();
+            if (starCount >= minimumStars)
+                return;
+            ExceptionUtil.handleException(this.starboardChannelManager.removeEntry(event.getMessageIdLong()), e -> LOGGER.error("Exception occurred while removing starboard entry in message reaction remove", e));
+        }, e -> LOGGER.warn("Failed to process message reaction remove", e));
     }
 
     @Override
@@ -120,13 +100,7 @@ public final class Star2 extends ListenerAdapter {
             return;
         if (starboardChannelId == event.getChannel().getIdLong())
             return;
-        try {
-            starboardChannelManager.removeEntry(event.getMessageIdLong());
-        } catch (RateLimitedException e) {
-            LOGGER.warn("Ratelimited", e);
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to remove starboard entry", e);
-        }
+        ExceptionUtil.handleExceptionAndLog(starboardChannelManager.removeEntry(event.getMessageIdLong()), "message reaction remove all event handler");
     }
 
     @Override
@@ -138,56 +112,30 @@ public final class Star2 extends ListenerAdapter {
             return;
         if (!emoji.equals(starEmoji))
             return;
-        try {
-            starboardChannelManager.removeEntry(event.getMessageIdLong());
-        } catch (RateLimitedException e) {
-            LOGGER.warn("Ratelimited", e);
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to remove starboard entry", e);
-        }
+        ExceptionUtil.handleExceptionAndLog(starboardChannelManager.removeEntry(event.getMessageIdLong()), "message reaction remove emoji event handler");
     }
 
     @Override
     public void onMessageUpdate(final MessageUpdateEvent event) {
         if (starboardChannelId == event.getChannel().getIdLong())
             return;
-        try {
-            starboardChannelManager.updateWithoutCreatingEntry(event.getMessage(), (short) -1);
-        } catch (RateLimitedException e) {
-            LOGGER.warn("Ratelimited", e);
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to remove starboard entry", e);
-        }
+        ExceptionUtil.handleExceptionAndLog(starboardChannelManager.updateWithoutCreatingEntry(event.getMessage(), (short) -1), "message update event handler");
     }
 
     @Override
     public void onMessageDelete(final MessageDeleteEvent event) {
         final long messageId = event.getMessageIdLong();
         if (starboardChannelId == event.getChannel().getIdLong()) {
-            try {
-                databaseConnection.removeBoardEntry(messageId);
-            } catch (SQLException e) {
-                throw new RuntimeException("Failed to remove starboard entry", e);
-            }
+            ExceptionUtil.handleExceptionAndLog(databaseConnection.removeBoardEntry(messageId), "message delete event handler (message in starboard channel)");
             return;
         }
-        try {
-            starboardChannelManager.removeEntry(messageId);
-        } catch (RateLimitedException e) {
-            LOGGER.warn("Ratelimited");
-        } catch (SQLException e) {
-            throw new RuntimeException("Failed to remove starboard entry", e);
-        }
+
+        ExceptionUtil.handleExceptionAndLog(starboardChannelManager.removeEntry(messageId), "message delete event handler");
     }
 
     @Override
     public void onMessageBulkDelete(final MessageBulkDeleteEvent event) {
-        final Consumer<Long> messageIdFunc;
-        if (event.getChannel().getIdLong() == starboardChannelId) {
-            messageIdFunc = (messageId) -> ExceptionUtil.wrap(SQLException.class, () -> databaseConnection.removeBoardEntry(messageId), e -> new IllegalStateException("Failed to remove starboard entry from database", e));
-        } else {
-            messageIdFunc = (messageId) -> ExceptionUtil.wrapMultiple(() -> starboardChannelManager.removeEntry(messageId), e -> new IllegalStateException("Failed to remove starboard entry", e), SQLException.class, RateLimitedException.class);
-        }
-        event.getMessageIds().stream().map(Long::parseUnsignedLong).forEach(messageIdFunc);
+        final Function<Long, CompletableFuture<?>> messageIdFunc = event.getChannel().getIdLong() == starboardChannelId ? databaseConnection::removeBoardEntry : starboardChannelManager::removeEntry;
+        CompletableFuture.allOf(event.getMessageIds().stream().map(Long::parseUnsignedLong).map(messageIdFunc).toArray(CompletableFuture[]::new)).join();
     }
 }

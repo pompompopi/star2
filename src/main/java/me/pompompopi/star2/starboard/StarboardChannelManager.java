@@ -83,40 +83,10 @@ public final class StarboardChannelManager {
                 .setTitle("Jump to Message")
                 .setUrl(message.getJumpUrl());
         String messageContent = message.getContentRaw().trim();
-        final boolean hasMessageContent = !messageContent.isEmpty();
         final List<Message.Attachment> attachments = message.getAttachments();
         final StringBuilder descriptionBuilder = new StringBuilder();
         if (!attachments.isEmpty()) {
-            final StringBuilder attachmentAdditionBuilder = new StringBuilder();
             builder.setImage(attachments.getFirst().getUrl());
-            if (attachments.size() > 1) {
-                final int maxAttachmentIdx = attachments.size() - 1;
-                for (int i = 1; i < attachments.size(); i++) {
-                    final Message.Attachment attachment = attachments.get(i);
-                    if (attachment.isSpoiler())
-                        attachmentAdditionBuilder.append("||");
-                    attachmentAdditionBuilder.append("[")
-                            .append(attachment.getFileName())
-                            .append("]")
-                            .append("(")
-                            .append(attachment.getProxyUrl())
-                            .append(")");
-                    if (attachment.isSpoiler())
-                        attachmentAdditionBuilder.append("||");
-                    if (i != maxAttachmentIdx)
-                        attachmentAdditionBuilder.append("\n");
-                }
-            }
-
-            final String attachmentAddition = attachmentAdditionBuilder.toString();
-            if (hasMessageContent) {
-                final int combinedLengths = messageContent.length() + attachmentAddition.length();
-                if (combinedLengths > FUNCTIONAL_EMBED_LIMIT)
-                    messageContent = messageContent.substring(0, FUNCTIONAL_EMBED_LIMIT - 4) + "...";
-                descriptionBuilder.append(messageContent);
-                descriptionBuilder.append("\n\n");
-                descriptionBuilder.append(attachmentAddition);
-            }
         } else {
             descriptionBuilder.append(messageContent);
         }

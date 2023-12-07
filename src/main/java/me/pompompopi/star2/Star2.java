@@ -152,7 +152,6 @@ public final class Star2 extends ListenerAdapter {
     public void onMessageUpdate(final MessageUpdateEvent event) {
         if (starboardChannelId == event.getChannel().getIdLong())
             return;
-        final Message message = event.getMessage();
         try {
             starboardChannelManager.updateWithoutCreatingEntry(event.getMessage(), (short) -1);
         } catch (RateLimitedException e) {

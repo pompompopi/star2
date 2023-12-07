@@ -136,6 +136,6 @@ public final class Star2 extends ListenerAdapter {
     @Override
     public void onMessageBulkDelete(final MessageBulkDeleteEvent event) {
         final Function<Long, CompletableFuture<?>> messageIdFunc = event.getChannel().getIdLong() == starboardChannelId ? databaseConnection::removeBoardEntry : starboardChannelManager::removeEntry;
-        CompletableFuture.allOf(event.getMessageIds().stream().map(Long::parseUnsignedLong).map(messageIdFunc).toArray(CompletableFuture[]::new)).join();
+        ExceptionUtil.handleExceptionAndLog(CompletableFuture.allOf(event.getMessageIds().stream().map(Long::parseUnsignedLong).map(messageIdFunc).toArray(CompletableFuture[]::new)), "message bulk delete event handler");
     }
 }

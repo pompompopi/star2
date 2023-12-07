@@ -11,7 +11,6 @@ import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.*;
 
@@ -105,11 +104,7 @@ public final class DatabaseConnection {
         return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
             final PreparedStatement statement = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = ?;");
             statement.setLong(1, userId);
-            final ResultSet results = statement.executeQuery();
-            final List<DatabaseRow> databaseRows = new ArrayList<>();
-            while (results.next())
-                databaseRows.add(new DatabaseRow(results));
-            return databaseRows;
+            return DatabaseRow.all(statement.executeQuery(), ArrayList::new);
         }, CompletionException::new), executorService);
     }
 
@@ -119,5 +114,17 @@ public final class DatabaseConnection {
             statement.setLong(1, userId);
             return statement.executeQuery().next();
         }, CompletionException::new), executorService);
+    }
+
+    public CompletableFuture<Collection<DatabaseRow>> removeBoardEntriesInChannel(final long channelId) {
+        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = this.connection.prepareStatement("DELETE FROM starboard WHERE original_channel_id = ? RETURNING *;");
+            statement.setLong(1, channelId);
+            return DatabaseRow.all(statement.executeQuery(), ArrayList::new);
+        }, CompletionException::new), executorService);
+    }
+
+    public CompletableFuture<Void> removeAllBoardEntries() {
+        return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> this.connection.prepareStatement("DELETE FROM starboard;").executeUpdate(), CompletionException::new), executorService);
     }
 }

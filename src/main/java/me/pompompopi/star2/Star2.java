@@ -10,6 +10,7 @@ import net.dv8tion.jda.api.entities.MessageReaction;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.entities.emoji.UnicodeEmoji;
+import net.dv8tion.jda.api.events.channel.ChannelDeleteEvent;
 import net.dv8tion.jda.api.events.message.MessageBulkDeleteEvent;
 import net.dv8tion.jda.api.events.message.MessageDeleteEvent;
 import net.dv8tion.jda.api.events.message.MessageUpdateEvent;
@@ -165,5 +166,15 @@ public final class Star2 extends ListenerAdapter {
     @Override
     public void onUserUpdateName(@NotNull final UserUpdateNameEvent event) {
         onDisplayedUserInfoUpdate(event);
+    }
+
+    @Override
+    public void onChannelDelete(@NotNull final ChannelDeleteEvent event) {
+        final long id = event.getChannel().getIdLong();
+        if (id == starboardChannelId) {
+            ExceptionUtil.handleExceptionAndLog(databaseConnection.removeAllBoardEntries(), "channel deletion (starboard channel)");
+            return;
+        }
+        ExceptionUtil.handleExceptionAndLog(starboardChannelManager.removeEntriesInChannel(event.getJDA(), event.getChannel().getIdLong()), "channel deletion");
     }
 }

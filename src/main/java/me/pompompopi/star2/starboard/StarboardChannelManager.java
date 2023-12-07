@@ -77,12 +77,17 @@ public final class StarboardChannelManager {
     public CompletableFuture<Void> updateEveryUserEntry(final JDA jda, final long userId) {
         return databaseConnection.getUserBoardEntries(userId).thenAcceptAsync(rows -> {
             for (final DatabaseRow row : rows) {
-                final TextChannel textChannel = jda.getTextChannelById(row.originalChannelId());
-                if (textChannel == null)
-                    return;
-                textChannel.retrieveMessageById(row.originalMessageId()).queue(message -> updateEntry(message, (short) -1, row));
+                final Optional<Message> messageOpt = row.toStarboardMessage(jda, starboardChannel.getIdLong()).join();
+                if (messageOpt.isEmpty())
+                    continue;
+                final Message message = messageOpt.get();
+                updateEntry(message, (short) -1, row);
             }
         });
+    }
+
+    public CompletableFuture<Void> removeEntriesInChannel(final JDA jda, final long channelId) {
+        return databaseConnection.removeBoardEntriesInChannel(channelId).thenAcceptAsync(databaseRows -> databaseRows.stream().map(row -> row.toStarboardMessage(jda, starboardChannel.getIdLong())).map(CompletableFuture::join).filter(Optional::isPresent).map(Optional::get).forEach(message -> message.delete().queue()));
     }
 
     public MessageEmbed createEmbed(final Message message, final short stars) {

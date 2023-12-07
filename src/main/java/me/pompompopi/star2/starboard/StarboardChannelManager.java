@@ -80,17 +80,12 @@ public final class StarboardChannelManager {
                 .setThumbnail(author.getEffectiveAvatarUrl())
                 .setFooter(stars + " " + starRaw)
                 .setTitle("Jump to Message")
-                .setUrl(message.getJumpUrl());
-        String messageContent = message.getContentRaw().trim();
-        final List<Message.Attachment> attachments = message.getAttachments();
-        final StringBuilder descriptionBuilder = new StringBuilder();
-        if (!attachments.isEmpty()) {
-            builder.setImage(attachments.getFirst().getUrl());
-        } else {
-            descriptionBuilder.append(messageContent);
-        }
+                .setUrl(message.getJumpUrl())
+                .setDescription(message.getContentRaw().trim());
 
-        builder.setDescription(descriptionBuilder);
+        final List<Message.Attachment> attachments = message.getAttachments();
+        if (!attachments.isEmpty())
+            builder.setImage(attachments.getFirst().getUrl());
         return builder.build();
     }
 }

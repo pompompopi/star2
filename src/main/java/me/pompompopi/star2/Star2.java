@@ -103,8 +103,6 @@ public final class Star2 extends ListenerAdapter {
 
     @Override
     public void onMessageReactionRemoveAll(final MessageReactionRemoveAllEvent event) {
-        if (!event.isFromGuild())
-            return;
         if (starboardChannelId == event.getChannel().getIdLong())
             return;
         ExceptionUtil.handleExceptionAndLog(starboardChannelManager.removeEntry(event.getMessageIdLong()), "message reaction remove all event handler");

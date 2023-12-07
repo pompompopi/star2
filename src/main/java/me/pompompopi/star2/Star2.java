@@ -33,7 +33,6 @@ public final class Star2 extends ListenerAdapter {
     private final long starboardChannelId;
     private final int minimumStars;
     private final UnicodeEmoji starEmoji;
-    private final JDA jda;
 
     Star2(final Configuration configuration) throws InterruptedException {
         try {
@@ -42,7 +41,7 @@ public final class Star2 extends ListenerAdapter {
             throw new IllegalStateException("Failed to connect to database", e);
         }
         Runtime.getRuntime().addShutdownHook(new Thread(databaseConnection::shutdown));
-        this.jda = JDABuilder.create(configuration.getToken(), GatewayIntent.GUILD_MESSAGE_REACTIONS, GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
+        final JDA jda = JDABuilder.create(configuration.getToken(), GatewayIntent.GUILD_MESSAGE_REACTIONS, GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
                 .addEventListeners(this)
                 .build();
         jda.awaitReady();

@@ -3,6 +3,7 @@ package me.pompompopi.star2.starboard;
 import me.pompompopi.star2.config.Configuration;
 import me.pompompopi.star2.database.DatabaseConnection;
 import me.pompompopi.star2.database.DatabaseRow;
+import me.pompompopi.star2.util.ExceptionUtil;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
@@ -26,7 +27,7 @@ public final class StarboardChannelManager {
     }
 
     private CompletableFuture<Void> createEntry(final Message message, final short stars) {
-        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, stars)).queue(starboardMessage -> databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), message.getAuthor().getIdLong(), starboardMessage.getIdLong(), stars)));
+        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, stars)).queue(starboardMessage -> ExceptionUtil.handleExceptionAndLog(databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), message.getAuthor().getIdLong(), starboardMessage.getIdLong(), stars), "create entry")));
     }
 
     private CompletableFuture<Void> updateEntry(final Message message, final short stars, final DatabaseRow databaseRow) {

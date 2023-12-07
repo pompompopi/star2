@@ -51,7 +51,7 @@ public final class Star2 extends ListenerAdapter {
                 .addEventListeners(this)
                 .build();
         jda.awaitReady();
-        this.databaseConnection.performMigration(jda);
+        ExceptionUtil.handleExceptionAndLog(this.databaseConnection.performMigration(jda), "database migration");
         this.starboardChannelManager = new StarboardChannelManager(jda, configuration, databaseConnection);
         this.starboardChannelId = configuration.getStarboardChannel();
         this.minimumStars = configuration.getMinimumReactions();

@@ -3,6 +3,7 @@ package me.pompompopi.star2.database;
 import me.pompompopi.star2.Star2;
 import me.pompompopi.star2.config.Configuration;
 import me.pompompopi.star2.util.ExceptionUtil;
+import me.pompompopi.star2.wrappers.ExceptionLoggingExecutorService;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.User;
@@ -16,7 +17,7 @@ import java.util.concurrent.*;
 
 public final class DatabaseConnection {
     private final Connection connection;
-    private final ExecutorService executorService = Executors.newSingleThreadExecutor();
+    private final ExecutorService executorService = new ExceptionLoggingExecutorService(Executors.newSingleThreadExecutor());
 
     public DatabaseConnection(final Configuration configuration) throws SQLException, ExecutionException, InterruptedException {
         final StringBuilder urlBuilder = new StringBuilder("jdbc:postgresql://");

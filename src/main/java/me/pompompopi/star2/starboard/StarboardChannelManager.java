@@ -1,9 +1,12 @@
 package me.pompompopi.star2.starboard;
 
+import me.pompompopi.star2.Star2;
 import me.pompompopi.star2.config.Configuration;
 import me.pompompopi.star2.database.DatabaseConnection;
 import me.pompompopi.star2.database.DatabaseRow;
 import me.pompompopi.star2.util.ExceptionUtil;
+import me.pompompopi.star2.util.FuturePool;
+import me.pompompopi.star2.util.Tuple;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
@@ -11,6 +14,7 @@ import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -84,6 +88,35 @@ public final class StarboardChannelManager {
                 final Message message = messageOpt.get();
                 updateEntry(message, (short) -1, row);
             }
+        });
+    }
+
+    public CompletableFuture<Void> recalculateEveryEntry(final JDA jda, final Star2 star2) {
+        return databaseConnection.getAllRows().thenAcceptAsync(rows -> {
+            final int minimumStars = star2.getMinimumStars();
+            final FuturePool pool = new FuturePool();
+            final List<Tuple<Short, Long>> starUpdateList = new ArrayList<>();
+            for (final DatabaseRow row : rows) {
+                final long originalMessageId = row.originalMessageId();
+                pool.poolAdd(row.toOriginalMessage(jda).thenAcceptAsync(messageOpt -> {
+                    if (messageOpt.isEmpty()) {
+                        removeEntry(originalMessageId);
+                        return;
+                    }
+                    final Message message = messageOpt.get();
+                    final short stars = (short) star2.countStarsExcludingAuthor(message);
+                    if (stars < minimumStars) {
+                        removeEntry(originalMessageId);
+                        return;
+                    }
+                    if (stars == row.stars())
+                        return;
+                    starUpdateList.add(new Tuple<>(stars, originalMessageId));
+                    pool.poolAdd(updateEntry(message, stars, row));
+                }));
+            }
+            pool.poolAdd(databaseConnection.updateStarsBulk(starUpdateList));
+            pool.join();
         });
     }
 

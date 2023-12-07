@@ -6,13 +6,14 @@ import me.pompompopi.star2.starboard.StarboardChannelManager;
 import me.pompompopi.star2.util.ExceptionUtil;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
-import net.dv8tion.jda.api.entities.MessageReaction;
+import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.entities.emoji.UnicodeEmoji;
 import net.dv8tion.jda.api.events.channel.ChannelDeleteEvent;
 import net.dv8tion.jda.api.events.message.MessageBulkDeleteEvent;
 import net.dv8tion.jda.api.events.message.MessageDeleteEvent;
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.message.MessageUpdateEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionAddEvent;
 import net.dv8tion.jda.api.events.message.react.MessageReactionRemoveAllEvent;
@@ -37,6 +38,8 @@ public final class Star2 extends ListenerAdapter {
     private final DatabaseConnection databaseConnection;
     private final StarboardChannelManager starboardChannelManager;
     private final long starboardChannelId;
+    private final long ownerId;
+    private final String prefix;
     private final int minimumStars;
     private final UnicodeEmoji starEmoji;
 
@@ -54,6 +57,8 @@ public final class Star2 extends ListenerAdapter {
         ExceptionUtil.handleExceptionAndLog(this.databaseConnection.performMigration(jda), "database migration");
         this.starboardChannelManager = new StarboardChannelManager(jda, configuration, databaseConnection);
         this.starboardChannelId = configuration.getStarboardChannel();
+        this.ownerId = configuration.getOwnerId();
+        this.prefix = configuration.getPrefix();
         this.minimumStars = configuration.getMinimumReactions();
         this.starEmoji = Emoji.fromUnicode(configuration.getStarEmoji());
     }
@@ -66,6 +71,15 @@ public final class Star2 extends ListenerAdapter {
         return emoji.getType() != Emoji.Type.UNICODE || !emoji.equals(starEmoji);
     }
 
+    public long countStarsExcludingAuthor(final Message message) {
+        final long authorId = message.getAuthor().getIdLong();
+        return message.retrieveReactionUsers(starEmoji).stream().filter(u -> u.getIdLong() != authorId).count();
+    }
+
+    public int getMinimumStars() {
+        return this.minimumStars;
+    }
+
     @Override
     public void onMessageReactionAdd(final MessageReactionAddEvent event) {
         if (starboardChannelId == event.getChannel().getIdLong())
@@ -73,12 +87,7 @@ public final class Star2 extends ListenerAdapter {
         if (isNotStar(event.getEmoji()))
             return;
         event.retrieveMessage().queue(message -> {
-            final MessageReaction reaction = message.getReaction(starEmoji);
-            if (reaction == null) {
-                LOGGER.warn("Reaction null while in the message reaction add event");
-                return;
-            }
-            final int starCount = reaction.getCount();
+            final long starCount = countStarsExcludingAuthor(message);
             if (starCount < minimumStars)
                 return;
 
@@ -93,8 +102,7 @@ public final class Star2 extends ListenerAdapter {
         if (isNotStar(event.getEmoji()))
             return;
         event.retrieveMessage().queue(message -> {
-            final MessageReaction messageReaction = message.getReaction(starEmoji);
-            final int starCount = messageReaction == null ? 0 : messageReaction.getCount();
+            final long starCount = countStarsExcludingAuthor(message);
             if (starCount >= minimumStars)
                 return;
             ExceptionUtil.handleExceptionAndLog(this.starboardChannelManager.removeEntry(event.getMessageIdLong()), "message reaction remove event");
@@ -118,6 +126,18 @@ public final class Star2 extends ListenerAdapter {
         if (!emoji.equals(starEmoji))
             return;
         ExceptionUtil.handleExceptionAndLog(starboardChannelManager.removeEntry(event.getMessageIdLong()), "message reaction remove emoji event handler");
+    }
+
+    @Override
+    public void onMessageReceived(final MessageReceivedEvent event) {
+        if (starboardChannelId == event.getChannel().getIdLong())
+            return;
+        if (event.getAuthor().getIdLong() != ownerId)
+            return;
+        if (!event.getMessage().getContentRaw().trim().equalsIgnoreCase(this.prefix + "recount"))
+            return;
+        LOGGER.info("Triggered recount");
+        starboardChannelManager.recalculateEveryEntry(event.getJDA(), this);
     }
 
     @Override

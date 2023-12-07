@@ -35,4 +35,13 @@ public record DatabaseRow(long originalMessageId, long originalChannelId, long o
             return Optional.of(textChannel.retrieveMessageById(starboardMessageId).complete(true));
         }, CompletionException::new));
     }
+
+    public CompletableFuture<Optional<Message>> toOriginalMessage(final JDA jda) {
+        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(RateLimitedException.class, () -> {
+            final TextChannel textChannel = jda.getTextChannelById(originalChannelId);
+            if (textChannel == null)
+                return Optional.empty();
+            return Optional.of(textChannel.retrieveMessageById(originalMessageId).complete(true));
+        }, CompletionException::new));
+    }
 }

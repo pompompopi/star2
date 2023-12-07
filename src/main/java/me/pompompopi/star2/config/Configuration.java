@@ -18,16 +18,20 @@ public class Configuration {
     private final int databasePort;
     private final String databaseUsername;
     private final String databasePassword;
+    private final long ownerId;
+    private final String prefix;
 
     public Configuration() {
         this.token = getEnvironmentVariable("DISCORD_TOKEN");
         this.starEmoji = getEnvironmentVariable("EMOJI", "⭐");
-        this.minimumReactions = ExceptionUtil.wrap(NumberFormatException.class, () -> Short.parseShort(getEnvironmentVariable("MINIMUM_REACTIONS", "3")), e -> new IllegalArgumentException("Invalid minimum reaction count provided"));
-        this.starboardChannel = ExceptionUtil.wrap(NumberFormatException.class, () -> Long.parseUnsignedLong(getEnvironmentVariable("STARBOARD_CHANNEL")), e -> new IllegalArgumentException("Invalid starboard channel provided"));
+        this.minimumReactions = ExceptionUtil.wrap(NumberFormatException.class, () -> Short.parseShort(getEnvironmentVariable("MINIMUM_REACTIONS", "3")), e -> new IllegalArgumentException("Invalid minimum reaction count provided", e));
+        this.starboardChannel = ExceptionUtil.wrap(NumberFormatException.class, () -> Long.parseUnsignedLong(getEnvironmentVariable("STARBOARD_CHANNEL")), e -> new IllegalArgumentException("Invalid starboard channel provided", e));
         this.databaseHost = getEnvironmentVariable("DATABASE_HOST", "localhost");
-        this.databasePort = ExceptionUtil.wrap(NumberFormatException.class, () -> Integer.parseUnsignedInt(getEnvironmentVariable("DATABASE_PORT", "5432")), e -> new IllegalArgumentException("Invalid database port provided"));
+        this.databasePort = ExceptionUtil.wrap(NumberFormatException.class, () -> Integer.parseUnsignedInt(getEnvironmentVariable("DATABASE_PORT", "5432")), e -> new IllegalArgumentException("Invalid database port provided", e));
         this.databaseUsername = getEnvironmentVariable("DATABASE_USERNAME", "postgres");
         this.databasePassword = getEnvironmentVariable("DATABASE_PASSWORD");
+        this.ownerId = ExceptionUtil.wrap(NumberFormatException.class, () -> Long.parseUnsignedLong(getEnvironmentVariable("OWNER_ID")), e -> new IllegalArgumentException("Invalid owner id provided", e));
+        this.prefix = getEnvironmentVariable("PREFIX", "s2!");
     }
 
     private String getEnvironmentVariable(final String key) {
@@ -75,7 +79,15 @@ public class Configuration {
         return databaseUsername;
     }
 
+    public String getPrefix() {
+        return prefix;
+    }
+
     public String getDatabasePassword() {
         return databasePassword;
+    }
+
+    public long getOwnerId() {
+        return ownerId;
     }
 }

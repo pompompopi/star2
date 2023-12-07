@@ -3,11 +3,11 @@ package me.pompompopi.star2.database;
 import me.pompompopi.star2.Star2;
 import me.pompompopi.star2.config.Configuration;
 import me.pompompopi.star2.util.ExceptionUtil;
+import me.pompompopi.star2.util.FuturePool;
+import me.pompompopi.star2.util.Tuple;
 import me.pompompopi.star2.wrappers.ExceptionLoggingExecutorService;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
-import net.dv8tion.jda.api.entities.User;
-import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 
 import java.sql.*;
 import java.util.ArrayList;
@@ -33,23 +33,25 @@ public final class DatabaseConnection {
     public CompletableFuture<Void> performMigration(final JDA jda) {
         return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
             final ResultSet results = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = -1;").executeQuery();
+            final FuturePool pool = new FuturePool();
             while (results.next()) {
-                final DatabaseRow databaseRow = new DatabaseRow(results);
-                final TextChannel textChannel = jda.getTextChannelById(databaseRow.originalChannelId());
-                if (textChannel == null)
-                    continue;
-                final long originalMessageId = databaseRow.originalMessageId();
-                textChannel.retrieveMessageById(databaseRow.originalMessageId())
-                        .map(Message::getAuthor)
-                        .map(User::getIdLong)
-                        .queue(authorId -> executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-                            final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET original_author_id = ? WHERE original_message_id = ?;");
-                            statement.setLong(1, authorId);
-                            statement.setLong(2, originalMessageId);
-                            statement.executeUpdate();
-                            Star2.LOGGER.info("Added author id column value ({}) for {}", authorId, originalMessageId);
-                        }, e -> new IllegalStateException("Exception migrating starboard entry", e))));
+                final DatabaseRow row = new DatabaseRow(results);
+                pool.poolRun(() -> row.toOriginalMessage(jda).thenAcceptAsync(messageOpt -> {
+                    if (messageOpt.isEmpty())
+                        return;
+                    final Message message = messageOpt.get();
+                    final long originalMessageId = message.getIdLong();
+                    final long authorId = message.getAuthor().getIdLong();
+                    executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+                        final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET original_author_id = ? WHERE original_message_id = ?;");
+                        statement.setLong(1, authorId);
+                        statement.setLong(2, originalMessageId);
+                        statement.executeUpdate();
+                        Star2.LOGGER.info("Added author id column value ({}) for {}", authorId, originalMessageId);
+                    }, e -> new IllegalStateException("Exception migrating starboard entry", e)));
+                }));
             }
+            pool.join();
         }, CompletionException::new), executorService);
     }
 
@@ -64,6 +66,17 @@ public final class DatabaseConnection {
             statement.setShort(1, newStarCount);
             statement.setLong(2, originalMessageId);
             statement.executeUpdate();
+        }, CompletionException::new), executorService);
+    }
+
+    public CompletableFuture<Void> updateStarsBulk(final Collection<Tuple<Short, Long>> updates) {
+        return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET stars = ? WHERE original_message_id = ?;");
+            for (final Tuple<Short, Long> update : updates) {
+                statement.setShort(1, update.first());
+                statement.setLong(2, update.second());
+                statement.addBatch();
+            }
         }, CompletionException::new), executorService);
     }
 
@@ -107,6 +120,10 @@ public final class DatabaseConnection {
             statement.setLong(1, userId);
             return DatabaseRow.all(statement.executeQuery(), ArrayList::new);
         }, CompletionException::new), executorService);
+    }
+
+    public CompletableFuture<Collection<DatabaseRow>> getAllRows() {
+        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> DatabaseRow.all(this.connection.prepareStatement("SELECT * FROM starboard;").executeQuery(), ArrayList::new), CompletionException::new), executorService);
     }
 
     public CompletableFuture<Boolean> userHasBoardEntry(final long userId) {

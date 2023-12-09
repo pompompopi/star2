@@ -82,7 +82,7 @@ public final class StarboardChannelManager {
     public CompletableFuture<Void> updateEveryUserEntry(final JDA jda, final long userId) {
         return databaseConnection.getUserBoardEntries(userId).thenAcceptAsync(rows -> {
             for (final DatabaseRow row : rows) {
-                final Optional<Message> messageOpt = row.toStarboardMessage(jda, starboardChannel.getIdLong()).join();
+                final Optional<Message> messageOpt = row.toOriginalMessage(jda).join();
                 if (messageOpt.isEmpty())
                     continue;
                 final Message message = messageOpt.get();
@@ -91,7 +91,7 @@ public final class StarboardChannelManager {
         });
     }
 
-    public CompletableFuture<Void> recalculateEveryEntry(final JDA jda, final Star2 star2) {
+    public CompletableFuture<Void> recalculateEveryEntry(final JDA jda, final Star2 star2, final boolean redo) {
         return databaseConnection.getAllRows().thenAcceptAsync(rows -> {
             final int minimumStars = star2.getMinimumStars();
             final FuturePool pool = new FuturePool();
@@ -109,7 +109,7 @@ public final class StarboardChannelManager {
                         removeEntry(originalMessageId);
                         return;
                     }
-                    if (stars == row.stars())
+                    if (stars == row.stars() && !redo)
                         return;
                     starUpdateList.add(new Tuple<>(stars, originalMessageId));
                     pool.poolAdd(updateEntry(message, stars, row));

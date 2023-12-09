@@ -139,10 +139,19 @@ public final class Star2 extends ListenerAdapter {
             return;
         if (event.getAuthor().getIdLong() != ownerId)
             return;
-        if (!event.getMessage().getContentRaw().trim().equalsIgnoreCase(this.prefix + "recount"))
+        final String content = event.getMessage().getContentRaw().trim();
+        if (!content.startsWith(this.prefix))
             return;
         LOGGER.info("Triggered recount");
-        starboardChannelManager.recalculateEveryEntry(event.getJDA(), this);
+        final boolean redo;
+        if (content.endsWith("recount")) {
+            redo = false;
+        } else if (content.endsWith("redo")) {
+            redo = true;
+        } else {
+            return;
+        }
+        starboardChannelManager.recalculateEveryEntry(event.getJDA(), this, redo);
     }
 
     @Override

@@ -104,7 +104,7 @@ public final class StarboardChannelManager {
                         return;
                     }
                     final Message message = messageOpt.get();
-                    final short stars = (short) star2.countStarsExcludingAuthor(message);
+                    final short stars = (short) (long) star2.countStarsExcludingAuthor(message).join();
                     if (stars < minimumStars) {
                         removeEntry(originalMessageId);
                         return;

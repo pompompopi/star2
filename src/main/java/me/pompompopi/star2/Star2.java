@@ -31,6 +31,8 @@ import org.slf4j.LoggerFactory;
 import java.sql.SQLException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Function;
 
 public final class Star2 extends ListenerAdapter {
@@ -42,6 +44,7 @@ public final class Star2 extends ListenerAdapter {
     private final String prefix;
     private final int minimumStars;
     private final UnicodeEmoji starEmoji;
+    private final ExecutorService executor = Executors.newCachedThreadPool();
 
     Star2(final Configuration configuration) throws InterruptedException {
         try {
@@ -71,9 +74,11 @@ public final class Star2 extends ListenerAdapter {
         return emoji.getType() != Emoji.Type.UNICODE || !emoji.equals(starEmoji);
     }
 
-    public long countStarsExcludingAuthor(final Message message) {
-        final long authorId = message.getAuthor().getIdLong();
-        return message.retrieveReactionUsers(starEmoji).stream().filter(u -> u.getIdLong() != authorId).count();
+    public CompletableFuture<Long> countStarsExcludingAuthor(final Message message) {
+        return CompletableFuture.supplyAsync(() -> {
+            final long authorId = message.getAuthor().getIdLong();
+            return message.retrieveReactionUsers(starEmoji).stream().filter(u -> u.getIdLong() != authorId).count();
+        }, executor);
     }
 
     public int getMinimumStars() {
@@ -87,7 +92,7 @@ public final class Star2 extends ListenerAdapter {
         if (isNotStar(event.getEmoji()))
             return;
         event.retrieveMessage().queue(message -> {
-            final long starCount = countStarsExcludingAuthor(message);
+            final long starCount = countStarsExcludingAuthor(message).join();
             if (starCount < minimumStars)
                 return;
 
@@ -102,7 +107,7 @@ public final class Star2 extends ListenerAdapter {
         if (isNotStar(event.getEmoji()))
             return;
         event.retrieveMessage().queue(message -> {
-            final long starCount = countStarsExcludingAuthor(message);
+            final long starCount = countStarsExcludingAuthor(message).join();
             if (starCount >= minimumStars)
                 return;
             ExceptionUtil.handleExceptionAndLog(this.starboardChannelManager.removeEntry(event.getMessageIdLong()), "message reaction remove event");

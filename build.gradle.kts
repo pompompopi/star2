@@ -16,11 +16,11 @@ repositories {
 }
 
 dependencies {
-    implementation("net.dv8tion:JDA:5.0.0-beta.18") {
+    implementation("net.dv8tion:JDA:5.0.0-beta.19") {
         exclude(module = "opus-java")
     }
     implementation("ch.qos.logback:logback-classic:1.4.14")
-    implementation("org.postgresql:postgresql:42.7.0")
+    implementation("org.postgresql:postgresql:42.7.1")
 }
 
 tasks {

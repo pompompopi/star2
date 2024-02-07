@@ -39,6 +39,7 @@ public final class DatabaseConnection {
 
     public CompletableFuture<Void> performMigration(final JDA jda) {
         return CompletableFuture.allOf(CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+            Star2.LOGGER.info("Running database migration #1");
             final ResultSet results = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = -1;").executeQuery();
             final FuturePool pool = new FuturePool();
             while (results.next()) {
@@ -59,16 +60,22 @@ public final class DatabaseConnection {
                 }));
             }
             pool.join();
+            Star2.LOGGER.info("Finished database migration #1");
         }, CompletionException::new), executorService), CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+            Star2.LOGGER.info("Running database migration #2");
             final ResultSet results = this.connection.prepareStatement("SELECT * FROM starboard WHERE referenced_message_id = -1;").executeQuery();
             final FuturePool pool = new FuturePool();
             while (results.next()) {
                 final DatabaseRow row = new DatabaseRow(results);
-                pool.poolRun(() -> row.toReferencedMessage(jda).thenCombineAsync(row.toOriginalMessage(jda), Tuple::new).thenAcceptAsync(messageTuple -> {
-                    if (messageTuple.second().isEmpty())
+                pool.poolRun(() -> row.toOriginalMessage(jda).thenAcceptAsync(originalMessageOpt -> {
+                    if (originalMessageOpt.isEmpty()) {
+                        Star2.LOGGER.warn("Could not find original message for row");
                         return;
-                    final long originalMessageId = messageTuple.second().get().getIdLong();
-                    if (messageTuple.first().isEmpty()) {
+                    }
+                    final Message originalMessage = originalMessageOpt.get();
+                    final long originalMessageId = originalMessage.getIdLong();
+                    final @Nullable Message referencedMessage = originalMessage.getReferencedMessage();
+                    if (referencedMessage == null) {
                         executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
                             final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET referenced_message_id = NULL WHERE original_message_id = ?;");
                             statement.setLong(1, originalMessageId);
@@ -77,7 +84,6 @@ public final class DatabaseConnection {
                         }, e -> new IllegalStateException("Exception nulling referenced message id", e)));
                         return;
                     }
-                    final Message referencedMessage = messageTuple.first().get();
                     final long referencedMessageId = referencedMessage.getIdLong();
                     final long referencedAuthorId = referencedMessage.getAuthor().getIdLong();
                     executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
@@ -90,6 +96,8 @@ public final class DatabaseConnection {
                     }, e -> new IllegalStateException("Exception adding referenced message id and referenced author id", e)));
                 }));
             }
+            pool.join();
+            Star2.LOGGER.info("Finished database migration #2");
         }, CompletionException::new), executorService));
     }
 

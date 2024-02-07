@@ -11,7 +11,7 @@ public final class FuturePool {
     private boolean finalized = false;
 
     @Nullable
-    public CompletableFuture<?> poolAdd(final CompletableFuture<?> future) {
+    public <T> CompletableFuture<T> poolAdd(final CompletableFuture<T> future) {
         if (finalized)
             return null;
         this.futures.add(future);
@@ -19,7 +19,7 @@ public final class FuturePool {
     }
 
     @Nullable
-    public CompletableFuture<?> poolRun(final Runnable runnable) {
+    public CompletableFuture<Void> poolRun(final Runnable runnable) {
         if (finalized)
             return null;
         final CompletableFuture<Void> future = CompletableFuture.runAsync(runnable);

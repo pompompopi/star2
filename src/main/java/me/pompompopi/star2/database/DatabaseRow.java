@@ -1,6 +1,7 @@
 package me.pompompopi.star2.database;
 
 import me.pompompopi.star2.util.ExceptionUtil;
+import me.pompompopi.star2.util.NullableUtil;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
@@ -15,9 +16,18 @@ import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
 
 public record DatabaseRow(long originalMessageId, long originalChannelId, long originalAuthorId,
-                          long starboardMessageId, short stars) {
+                          long starboardMessageId, Optional<Long> referencedMessageId,
+                          Optional<Long> referencedAuthorId, short stars) {
     public DatabaseRow(final ResultSet resultSet) throws SQLException {
-        this(resultSet.getLong("original_message_id"), resultSet.getLong("original_channel_id"), resultSet.getLong("original_author_id"), resultSet.getLong("starboard_message_id"), resultSet.getShort("stars"));
+        this(
+                resultSet.getLong("original_message_id"),
+                resultSet.getLong("original_channel_id"),
+                resultSet.getLong("original_author_id"),
+                resultSet.getLong("starboard_message_id"),
+                NullableUtil.mapToPossiblyEmpty(resultSet.getLong("referenced_message_id"), l -> l == 0),
+                NullableUtil.mapToPossiblyEmpty(resultSet.getLong("referenced_author_id"), l -> l == 0),
+                resultSet.getShort("stars")
+        );
     }
 
     public static Collection<DatabaseRow> all(final ResultSet resultSet, final Supplier<Collection<DatabaseRow>> collectionSupplier) throws SQLException {
@@ -42,6 +52,17 @@ public record DatabaseRow(long originalMessageId, long originalChannelId, long o
             if (textChannel == null)
                 return Optional.empty();
             return Optional.of(textChannel.retrieveMessageById(originalMessageId).complete(true));
+        }, CompletionException::new));
+    }
+
+    public CompletableFuture<Optional<Message>> toReferencedMessage(final JDA jda) {
+        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(RateLimitedException.class, () -> {
+            if (referencedMessageId.isEmpty())
+                return Optional.empty();
+            final TextChannel textChannel = jda.getTextChannelById(originalChannelId);
+            if (textChannel == null)
+                return Optional.empty();
+            return Optional.of(textChannel.retrieveMessageById(referencedMessageId.get()).complete(true));
         }, CompletionException::new));
     }
 }

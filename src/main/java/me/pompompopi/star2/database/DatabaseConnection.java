@@ -8,11 +8,13 @@ import me.pompompopi.star2.util.Tuple;
 import me.pompompopi.star2.wrappers.ExceptionLoggingExecutorService;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Message;
+import org.jetbrains.annotations.Nullable;
 
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.*;
 
 public final class DatabaseConnection {
@@ -26,12 +28,17 @@ public final class DatabaseConnection {
             urlBuilder.append(":5432");
         urlBuilder.append("/");
         this.connection = DriverManager.getConnection(urlBuilder.toString(), configuration.getDatabaseUsername(), configuration.getDatabasePassword());
-        this.executorService.submit(() -> this.connection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS original_author_id bigint NOT NULL DEFAULT -1;").executeUpdate()).get();
-        this.executorService.submit(() -> this.connection.prepareStatement("CREATE TABLE IF NOT EXISTS starboard (original_message_id bigint NOT NULL PRIMARY KEY, original_channel_id bigint NOT NULL, original_author_id bigint NOT NULL, starboard_message_id bigint NOT NULL UNIQUE, stars smallint NOT NULL);").executeUpdate()).get();
+        this.executorService.invokeAll(Set.of(
+                        () -> this.connection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS original_author_id bigint NOT NULL DEFAULT -1;").executeUpdate(),
+                        () -> this.connection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS referenced_message_id bigint DEFAULT -1;").executeUpdate(),
+                        () -> this.connection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS referenced_author_id bigint DEFAULT NULL;").executeUpdate(),
+                        () -> this.connection.prepareStatement("CREATE TABLE IF NOT EXISTS starboard (original_message_id bigint NOT NULL PRIMARY KEY, original_channel_id bigint NOT NULL, original_author_id bigint NOT NULL, starboard_message_id bigint NOT NULL UNIQUE, referenced_message_id bigint, referenced_author_id bigint, stars smallint NOT NULL);").executeUpdate())
+                )
+                .getLast().get();
     }
 
     public CompletableFuture<Void> performMigration(final JDA jda) {
-        return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+        return CompletableFuture.allOf(CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
             final ResultSet results = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = -1;").executeQuery();
             final FuturePool pool = new FuturePool();
             while (results.next()) {
@@ -52,7 +59,38 @@ public final class DatabaseConnection {
                 }));
             }
             pool.join();
-        }, CompletionException::new), executorService);
+        }, CompletionException::new), executorService), CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final ResultSet results = this.connection.prepareStatement("SELECT * FROM starboard WHERE referenced_message_id = -1;").executeQuery();
+            final FuturePool pool = new FuturePool();
+            while (results.next()) {
+                final DatabaseRow row = new DatabaseRow(results);
+                pool.poolRun(() -> row.toReferencedMessage(jda).thenCombineAsync(row.toOriginalMessage(jda), Tuple::new).thenAcceptAsync(messageTuple -> {
+                    if (messageTuple.second().isEmpty())
+                        return;
+                    final long originalMessageId = messageTuple.second().get().getIdLong();
+                    if (messageTuple.first().isEmpty()) {
+                        executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+                            final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET referenced_message_id = NULL WHERE original_message_id = ?;");
+                            statement.setLong(1, originalMessageId);
+                            statement.executeUpdate();
+                            Star2.LOGGER.info("Nulled out referenced message id column value for {} as it doesn't reply to anything", originalMessageId);
+                        }, e -> new IllegalStateException("Exception nulling referenced message id", e)));
+                        return;
+                    }
+                    final Message referencedMessage = messageTuple.first().get();
+                    final long referencedMessageId = referencedMessage.getIdLong();
+                    final long referencedAuthorId = referencedMessage.getAuthor().getIdLong();
+                    executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+                        final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET referenced_message_id = ?, referenced_author_id = ? WHERE original_message_id = ?;");
+                        statement.setLong(1, referencedMessageId);
+                        statement.setLong(2, referencedAuthorId);
+                        statement.setLong(3, originalMessageId);
+                        statement.executeUpdate();
+                        Star2.LOGGER.info("Added reference information to {}, reference message id: {}, reference author id: {}", originalMessageId, referencedMessageId, referencedAuthorId);
+                    }, e -> new IllegalStateException("Exception adding referenced message id and referenced author id", e)));
+                }));
+            }
+        }, CompletionException::new), executorService));
     }
 
     public void shutdown() {
@@ -91,14 +129,24 @@ public final class DatabaseConnection {
         }, CompletionException::new), executorService);
     }
 
-    public CompletableFuture<Void> addBoardEntry(final long originalMessageId, final long originalChannelId, final long originalAuthorId, final long starboardMessageId, final short stars) {
+    public CompletableFuture<Void> addBoardEntry(final long originalMessageId, final long originalChannelId, final long originalAuthorId, final long starboardMessageId, final @Nullable Long referencedMessageId, final @Nullable Long referencedAuthorId, final short stars) {
         return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("INSERT INTO starboard (original_message_id, original_channel_id, original_author_id, starboard_message_id, stars) VALUES (?, ?, ?, ?, ?);");
+            final PreparedStatement statement = this.connection.prepareStatement("INSERT INTO starboard (original_message_id, original_channel_id, original_author_id, starboard_message_id, referenced_message_id, referenced_author_id, stars) VALUES (?, ?, ?, ?, ?, ?, ?);");
             statement.setLong(1, originalMessageId);
             statement.setLong(2, originalChannelId);
             statement.setLong(3, originalAuthorId);
             statement.setLong(4, starboardMessageId);
-            statement.setShort(5, stars);
+            if (referencedMessageId != null) {
+                statement.setLong(5, referencedMessageId);
+            } else {
+                statement.setNull(5, Types.BIGINT);
+            }
+            if (referencedAuthorId != null) {
+                statement.setLong(6, referencedAuthorId);
+            } else {
+                statement.setNull(6, Types.BIGINT);
+            }
+            statement.setShort(7, stars);
             statement.executeUpdate();
         }, CompletionException::new), executorService);
     }
@@ -111,6 +159,14 @@ public final class DatabaseConnection {
             if (!results.next())
                 return Optional.empty();
             return Optional.of(new DatabaseRow(results));
+        }, CompletionException::new), executorService);
+    }
+
+    public CompletableFuture<Collection<DatabaseRow>> getStarboardsInReferenceTo(final long referencedMessageId) {
+        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = this.connection.prepareStatement("SELECT * FROM starboard WHERE referenced_message_id = ?;");
+            statement.setLong(1, referencedMessageId);
+            return DatabaseRow.all(statement.executeQuery(), ArrayList::new);
         }, CompletionException::new), executorService);
     }
 

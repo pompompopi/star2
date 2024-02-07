@@ -6,18 +6,20 @@ import me.pompompopi.star2.database.DatabaseConnection;
 import me.pompompopi.star2.database.DatabaseRow;
 import me.pompompopi.star2.util.ExceptionUtil;
 import me.pompompopi.star2.util.FuturePool;
+import me.pompompopi.star2.util.NullableUtil;
 import me.pompompopi.star2.util.Tuple;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.entities.ISnowflake;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
+import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 public final class StarboardChannelManager {
     private final DatabaseConnection databaseConnection;
@@ -30,40 +32,52 @@ public final class StarboardChannelManager {
         this.starRaw = configuration.getStarEmoji();
     }
 
-    private CompletableFuture<Void> createEntry(final Message message, final short stars) {
-        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, stars)).queue(starboardMessage -> ExceptionUtil.handleExceptionAndLog(databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), message.getAuthor().getIdLong(), starboardMessage.getIdLong(), stars), "create entry")));
+    private CompletableFuture<Void> createEntry(final Message message, final @Nullable Message referencedMessage, final short stars) {
+        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, referencedMessage, stars)).queue(starboardMessage -> ExceptionUtil.handleExceptionAndLog(databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), message.getAuthor().getIdLong(), starboardMessage.getIdLong(), NullableUtil.mapFromPossiblyNull(referencedMessage, ISnowflake::getIdLong), NullableUtil.mapFromPossiblyNull(referencedMessage, referencedMessageAct -> referencedMessageAct.getAuthor().getIdLong()), stars), "create entry")));
     }
 
-    private CompletableFuture<Void> updateEntry(final Message message, final short stars, final DatabaseRow databaseRow) {
+    private CompletableFuture<Void> updateEntry(final Message message, final @Nullable Message referencedMessage, final short stars, final DatabaseRow databaseRow) {
         return CompletableFuture.runAsync(() -> {
             final long originalMessageId = message.getIdLong();
-            if (stars != -1) {
-                if (stars != databaseRow.stars())
-                    databaseConnection.updateStars(originalMessageId, stars).join();
-            }
-            starboardChannel.editMessageEmbedsById(databaseRow.starboardMessageId(), createEmbed(message, stars == -1 ? databaseRow.stars() : stars)).queue();
+            if (stars != -1 && (stars != databaseRow.stars()))
+                databaseConnection.updateStars(originalMessageId, stars).join();
+            starboardChannel.editMessageEmbedsById(databaseRow.starboardMessageId(), createEmbed(message, referencedMessage, stars == -1 ? databaseRow.stars() : stars)).queue();
         });
     }
 
-    public CompletableFuture<Boolean> updateOrCreateEntry(final Message message, final short stars) {
-        return updateOrCreateEntry0(message, stars, true);
+    public CompletableFuture<Boolean> updateOrCreateEntry(final Message message, final @Nullable Message referencedMessage, final short stars) {
+        return updateOrCreateEntry0(message, referencedMessage, stars, true);
     }
 
-    public CompletableFuture<Boolean> updateWithoutCreatingEntry(final Message message, final short stars) {
-        return updateOrCreateEntry0(message, stars, false);
+    public CompletableFuture<Boolean> updateWithoutCreatingEntry(final Message message, final @Nullable Message referencedMessage, final short stars) {
+        return updateOrCreateEntry0(message, referencedMessage, stars, false);
     }
 
-    private CompletableFuture<Boolean> updateOrCreateEntry0(final Message message, final short stars, final boolean create) {
+    private CompletableFuture<Boolean> updateOrCreateEntry0(final Message message, final @Nullable Message referencedMessage, final short stars, final boolean create) {
         return CompletableFuture.supplyAsync(() -> {
             final Optional<DatabaseRow> databaseRowOpt = databaseConnection.getBoardEntry(message.getIdLong()).join();
             if (databaseRowOpt.isPresent()) {
-                updateEntry(message, stars, databaseRowOpt.get()).join();
+                updateEntry(message, referencedMessage, stars, databaseRowOpt.get()).join();
                 return true;
             }
-            if (!create)
-                return false;
+            if (!create) {
+                final Collection<DatabaseRow> inReferenceTo = databaseConnection.getStarboardsInReferenceTo(message.getIdLong()).join();
+                if (inReferenceTo.isEmpty())
+                    return false;
+                final JDA jda = message.getJDA();
+                final FuturePool pool = new FuturePool();
+                for (final DatabaseRow databaseRow : inReferenceTo) {
+                    pool.poolRun(() -> databaseRow.toOriginalMessage(jda).thenAcceptAsync(originalMessageOpt -> {
+                        if (originalMessageOpt.isEmpty())
+                            return;
+                        updateEntry(originalMessageOpt.get(), message, databaseRow.stars(), databaseRow).join();
+                    }));
+                }
+                pool.join();
+                return true;
+            }
 
-            createEntry(message, stars).join();
+            createEntry(message, referencedMessage, stars).join();
             return true;
         });
     }
@@ -85,8 +99,9 @@ public final class StarboardChannelManager {
                 final Optional<Message> messageOpt = row.toOriginalMessage(jda).join();
                 if (messageOpt.isEmpty())
                     continue;
+                final Optional<Message> referencedMessageOpt = row.toReferencedMessage(jda).join();
                 final Message message = messageOpt.get();
-                updateEntry(message, (short) -1, row);
+                updateEntry(message, referencedMessageOpt.orElse(null), (short) -1, row);
             }
         });
     }
@@ -98,7 +113,8 @@ public final class StarboardChannelManager {
             final List<Tuple<Short, Long>> starUpdateList = new ArrayList<>();
             for (final DatabaseRow row : rows) {
                 final long originalMessageId = row.originalMessageId();
-                pool.poolAdd(row.toOriginalMessage(jda).thenAcceptAsync(messageOpt -> {
+                pool.poolAdd(row.toOriginalMessage(jda).thenCombineAsync(row.toReferencedMessage(jda), Tuple::new).thenAcceptAsync(messageTup -> {
+                    final Optional<Message> messageOpt = messageTup.first();
                     if (messageOpt.isEmpty()) {
                         removeEntry(originalMessageId);
                         return;
@@ -112,7 +128,7 @@ public final class StarboardChannelManager {
                     if (stars == row.stars() && !redo)
                         return;
                     starUpdateList.add(new Tuple<>(stars, originalMessageId));
-                    pool.poolAdd(updateEntry(message, stars, row));
+                    pool.poolAdd(updateEntry(message, messageTup.second().orElse(null), stars, row));
                 }));
             }
             pool.poolAdd(databaseConnection.updateStarsBulk(starUpdateList));
@@ -124,21 +140,28 @@ public final class StarboardChannelManager {
         return databaseConnection.removeBoardEntriesInChannel(channelId).thenAcceptAsync(databaseRows -> databaseRows.stream().map(row -> row.toStarboardMessage(jda, starboardChannel.getIdLong())).map(CompletableFuture::join).filter(Optional::isPresent).map(Optional::get).forEach(message -> message.delete().queue()));
     }
 
-    public MessageEmbed createEmbed(final Message message, final short stars) {
+    private MessageEmbed createEmbedFromMessage(final Message message, final String footer, final int color) {
         final User author = message.getAuthor();
-        final EmbedBuilder builder = new EmbedBuilder()
-                .setColor(0xFDD835)
+        final EmbedBuilder embedBuilder = new EmbedBuilder()
+                .setColor(color)
                 .setTimestamp(message.getTimeEdited() == null ? message.getTimeCreated() : message.getTimeEdited())
                 .setAuthor(author.getName())
                 .setThumbnail(author.getEffectiveAvatarUrl())
-                .setFooter(stars + " " + starRaw)
                 .setTitle("Jump to Message")
                 .setUrl(message.getJumpUrl())
+                .setFooter(footer)
                 .setDescription(message.getContentRaw().trim());
 
         final List<Message.Attachment> attachments = message.getAttachments();
         if (!attachments.isEmpty())
-            builder.setImage(attachments.getFirst().getUrl());
-        return builder.build();
+            embedBuilder.setImage(attachments.getFirst().getUrl());
+        return embedBuilder.build();
+    }
+
+    public Collection<MessageEmbed> createEmbed(final Message message, final @Nullable Message referencedMessage, final short stars) {
+        return Stream.of(NullableUtil.mapFromPossiblyNull(referencedMessage, referencedMessageAct -> createEmbedFromMessage(referencedMessageAct, "Original Message", 0xE3E5E8)),
+                        createEmbedFromMessage(message, stars + " " + starRaw, 0xFDD835))
+                .filter(Objects::nonNull)
+                .toList();
     }
 }

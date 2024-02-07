@@ -96,7 +96,7 @@ public final class Star2 extends ListenerAdapter {
             if (starCount < minimumStars)
                 return;
 
-            ExceptionUtil.handleExceptionAndLog(this.starboardChannelManager.updateOrCreateEntry(message, (short) starCount), "message reaction add event");
+            ExceptionUtil.handleExceptionAndLog(this.starboardChannelManager.updateOrCreateEntry(message, message.getReferencedMessage(), (short) starCount), "message reaction add event");
         }, e -> LOGGER.warn("Failed to process message reaction add", e));
     }
 
@@ -158,7 +158,7 @@ public final class Star2 extends ListenerAdapter {
     public void onMessageUpdate(final MessageUpdateEvent event) {
         if (starboardChannelId == event.getChannel().getIdLong())
             return;
-        ExceptionUtil.handleExceptionAndLog(starboardChannelManager.updateWithoutCreatingEntry(event.getMessage(), (short) -1), "message update event handler");
+        event.getChannel().retrieveMessageById(event.getMessageIdLong()).queue(message -> ExceptionUtil.handleExceptionAndLog(starboardChannelManager.updateWithoutCreatingEntry(message, message.getReferencedMessage(), (short) -1), "message update event handler"));
     }
 
     @Override

@@ -18,8 +18,12 @@ import java.util.Set;
 import java.util.concurrent.*;
 
 public final class DatabaseConnection {
-    private final Connection connection;
+    private final Semaphore connectionSemaphore = new Semaphore(1);
     private final ExecutorService executorService = new ExceptionLoggingExecutorService(Executors.newSingleThreadExecutor());
+    private final String connectionUrl;
+    private final String connectionUsername;
+    private final String connectionPassword;
+    private Connection databaseConnection;
 
     public DatabaseConnection(final Configuration configuration) throws SQLException, ExecutionException, InterruptedException {
         final StringBuilder urlBuilder = new StringBuilder("jdbc:postgresql://");
@@ -27,20 +31,68 @@ public final class DatabaseConnection {
         if (configuration.getDatabasePort() != 5432)
             urlBuilder.append(":5432");
         urlBuilder.append("/");
-        this.connection = DriverManager.getConnection(urlBuilder.toString(), configuration.getDatabaseUsername(), configuration.getDatabasePassword());
+        this.connectionUrl = urlBuilder.toString();
+        this.connectionUsername = configuration.getDatabaseUsername();
+        this.connectionPassword = configuration.getDatabasePassword();
+        this.databaseConnection = this.getDatabaseConnection();
         this.executorService.invokeAll(Set.of(
-                        () -> this.connection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS original_author_id bigint NOT NULL DEFAULT -1;").executeUpdate(),
-                        () -> this.connection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS referenced_message_id bigint DEFAULT -1;").executeUpdate(),
-                        () -> this.connection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS referenced_author_id bigint DEFAULT NULL;").executeUpdate(),
-                        () -> this.connection.prepareStatement("CREATE TABLE IF NOT EXISTS starboard (original_message_id bigint NOT NULL PRIMARY KEY, original_channel_id bigint NOT NULL, original_author_id bigint NOT NULL, starboard_message_id bigint NOT NULL UNIQUE, referenced_message_id bigint, referenced_author_id bigint, stars smallint NOT NULL);").executeUpdate())
+                        () -> this.databaseConnection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS original_author_id bigint NOT NULL DEFAULT -1;").executeUpdate(),
+                        () -> this.databaseConnection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS referenced_message_id bigint DEFAULT -1;").executeUpdate(),
+                        () -> this.databaseConnection.prepareStatement("ALTER TABLE IF EXISTS ONLY starboard ADD COLUMN IF NOT EXISTS referenced_author_id bigint DEFAULT NULL;").executeUpdate(),
+                        () -> this.databaseConnection.prepareStatement("CREATE TABLE IF NOT EXISTS starboard (original_message_id bigint NOT NULL PRIMARY KEY, original_channel_id bigint NOT NULL, original_author_id bigint NOT NULL, starboard_message_id bigint NOT NULL UNIQUE, referenced_message_id bigint, referenced_author_id bigint, stars smallint NOT NULL);").executeUpdate())
                 )
                 .getLast().get();
     }
 
+    private Connection getDatabaseConnection() throws SQLException {
+        return DriverManager.getConnection(this.connectionUrl, this.connectionUsername, this.connectionPassword);
+    }
+
+    public CompletableFuture<Connection> blockForConnection() {
+        return CompletableFuture.supplyAsync(() -> {
+            this.connectionSemaphore.acquireUninterruptibly();
+            boolean closed;
+            try {
+                closed = this.databaseConnection.isClosed();
+            } catch (SQLException e) {
+                closed = true;
+            }
+
+            if (!closed) {
+                try {
+                    this.databaseConnection.prepareCall(";").execute();
+                } catch (SQLException e) {
+                    closed = true;
+                }
+            }
+
+            if (closed) {
+                for (int i = 0; i < 50; i++) {
+                    ExceptionUtil.wrap(InterruptedException.class, () -> Thread.sleep(5000), CompletionException::new);
+                    final Connection connection;
+                    try {
+                        connection = this.getDatabaseConnection();
+                    } catch (SQLException e) {
+                        Star2.LOGGER.error("Failed to re-establish database connection", e);
+                        continue;
+                    }
+                    this.databaseConnection = connection;
+                    this.connectionSemaphore.release();
+                    return this.databaseConnection;
+                }
+            } else {
+                this.connectionSemaphore.release();
+                return this.databaseConnection;
+            }
+
+            throw new CompletionException(new RuntimeException("Failed to retrieve connection in time"));
+        });
+    }
+
     public CompletableFuture<Void> performMigration(final JDA jda) {
-        return CompletableFuture.allOf(CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+        return CompletableFuture.allOf(this.blockForConnection().thenAcceptAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
             Star2.LOGGER.info("Running database migration #1");
-            final ResultSet results = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = -1;").executeQuery();
+            final ResultSet results = connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = -1;").executeQuery();
             final FuturePool pool = new FuturePool();
             while (results.next()) {
                 final DatabaseRow row = new DatabaseRow(results);
@@ -51,7 +103,7 @@ public final class DatabaseConnection {
                     final long originalMessageId = message.getIdLong();
                     final long authorId = message.getAuthor().getIdLong();
                     executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-                        final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET original_author_id = ? WHERE original_message_id = ?;");
+                        final PreparedStatement statement = connection.prepareStatement("UPDATE starboard SET original_author_id = ? WHERE original_message_id = ?;");
                         statement.setLong(1, authorId);
                         statement.setLong(2, originalMessageId);
                         statement.executeUpdate();
@@ -61,9 +113,9 @@ public final class DatabaseConnection {
             }
             pool.join();
             Star2.LOGGER.info("Finished database migration #1");
-        }, CompletionException::new), executorService), CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
+        }, CompletionException::new), executorService), this.blockForConnection().thenAcceptAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
             Star2.LOGGER.info("Running database migration #2");
-            final ResultSet results = this.connection.prepareStatement("SELECT * FROM starboard WHERE referenced_message_id = -1;").executeQuery();
+            final ResultSet results = connection.prepareStatement("SELECT * FROM starboard WHERE referenced_message_id = -1;").executeQuery();
             final FuturePool pool = new FuturePool();
             while (results.next()) {
                 final DatabaseRow row = new DatabaseRow(results);
@@ -77,7 +129,7 @@ public final class DatabaseConnection {
                     final @Nullable Message referencedMessage = originalMessage.getReferencedMessage();
                     if (referencedMessage == null) {
                         executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-                            final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET referenced_message_id = NULL WHERE original_message_id = ?;");
+                            final PreparedStatement statement = connection.prepareStatement("UPDATE starboard SET referenced_message_id = NULL WHERE original_message_id = ?;");
                             statement.setLong(1, originalMessageId);
                             statement.executeUpdate();
                             Star2.LOGGER.info("Nulled out referenced message id column value for {} as it doesn't reply to anything", originalMessageId);
@@ -87,7 +139,7 @@ public final class DatabaseConnection {
                     final long referencedMessageId = referencedMessage.getIdLong();
                     final long referencedAuthorId = referencedMessage.getAuthor().getIdLong();
                     executorService.submit(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-                        final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET referenced_message_id = ?, referenced_author_id = ? WHERE original_message_id = ?;");
+                        final PreparedStatement statement = connection.prepareStatement("UPDATE starboard SET referenced_message_id = ?, referenced_author_id = ? WHERE original_message_id = ?;");
                         statement.setLong(1, referencedMessageId);
                         statement.setLong(2, referencedAuthorId);
                         statement.setLong(3, originalMessageId);
@@ -102,13 +154,13 @@ public final class DatabaseConnection {
     }
 
     public void shutdown() {
-        ExceptionUtil.ignore(this.connection::commit);
-        ExceptionUtil.ignore(this.connection::close);
+        ExceptionUtil.ignore(this.databaseConnection::commit);
+        ExceptionUtil.ignore(this.databaseConnection::close);
     }
 
     public CompletableFuture<Void> updateStars(final long originalMessageId, final short newStarCount) {
-        return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET stars = ? WHERE original_message_id = ?;");
+        return this.blockForConnection().thenAcceptAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("UPDATE starboard SET stars = ? WHERE original_message_id = ?;");
             statement.setShort(1, newStarCount);
             statement.setLong(2, originalMessageId);
             statement.executeUpdate();
@@ -116,8 +168,8 @@ public final class DatabaseConnection {
     }
 
     public CompletableFuture<Void> updateStarsBulk(final Collection<Tuple<Short, Long>> updates) {
-        return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("UPDATE starboard SET stars = ? WHERE original_message_id = ?;");
+        return this.blockForConnection().thenAcceptAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("UPDATE starboard SET stars = ? WHERE original_message_id = ?;");
             for (final Tuple<Short, Long> update : updates) {
                 statement.setShort(1, update.first());
                 statement.setLong(2, update.second());
@@ -127,8 +179,8 @@ public final class DatabaseConnection {
     }
 
     public CompletableFuture<Optional<DatabaseRow>> removeBoardEntry(final long originalMessageId) {
-        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("DELETE FROM starboard WHERE original_message_id = ? RETURNING *;");
+        return this.blockForConnection().thenApplyAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("DELETE FROM starboard WHERE original_message_id = ? RETURNING *;");
             statement.setLong(1, originalMessageId);
             final ResultSet results = statement.executeQuery();
             if (!results.next())
@@ -138,8 +190,8 @@ public final class DatabaseConnection {
     }
 
     public CompletableFuture<Void> addBoardEntry(final long originalMessageId, final long originalChannelId, final long originalAuthorId, final long starboardMessageId, final @Nullable Long referencedMessageId, final @Nullable Long referencedAuthorId, final short stars) {
-        return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("INSERT INTO starboard (original_message_id, original_channel_id, original_author_id, starboard_message_id, referenced_message_id, referenced_author_id, stars) VALUES (?, ?, ?, ?, ?, ?, ?);");
+        return this.blockForConnection().thenAcceptAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("INSERT INTO starboard (original_message_id, original_channel_id, original_author_id, starboard_message_id, referenced_message_id, referenced_author_id, stars) VALUES (?, ?, ?, ?, ?, ?, ?);");
             statement.setLong(1, originalMessageId);
             statement.setLong(2, originalChannelId);
             statement.setLong(3, originalAuthorId);
@@ -160,8 +212,8 @@ public final class DatabaseConnection {
     }
 
     public CompletableFuture<Optional<DatabaseRow>> getBoardEntry(final long originalMessageId) {
-        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_message_id = ?;");
+        return this.blockForConnection().thenApplyAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("SELECT * FROM starboard WHERE original_message_id = ?;");
             statement.setLong(1, originalMessageId);
             final ResultSet results = statement.executeQuery();
             if (!results.next())
@@ -171,42 +223,42 @@ public final class DatabaseConnection {
     }
 
     public CompletableFuture<Collection<DatabaseRow>> getStarboardsInReferenceTo(final long referencedMessageId) {
-        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("SELECT * FROM starboard WHERE referenced_message_id = ?;");
+        return this.blockForConnection().thenApplyAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("SELECT * FROM starboard WHERE referenced_message_id = ?;");
             statement.setLong(1, referencedMessageId);
             return DatabaseRow.all(statement.executeQuery(), ArrayList::new);
         }, CompletionException::new), executorService);
     }
 
     public CompletableFuture<Collection<DatabaseRow>> getUserBoardEntries(final long userId) {
-        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = ?;");
+        return this.blockForConnection().thenApplyAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = ?;");
             statement.setLong(1, userId);
             return DatabaseRow.all(statement.executeQuery(), ArrayList::new);
         }, CompletionException::new), executorService);
     }
 
     public CompletableFuture<Collection<DatabaseRow>> getAllRows() {
-        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> DatabaseRow.all(this.connection.prepareStatement("SELECT * FROM starboard;").executeQuery(), ArrayList::new), CompletionException::new), executorService);
+        return this.blockForConnection().thenApplyAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> DatabaseRow.all(connection.prepareStatement("SELECT * FROM starboard;").executeQuery(), ArrayList::new), CompletionException::new), executorService);
     }
 
     public CompletableFuture<Boolean> userHasBoardEntry(final long userId) {
-        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = ? LIMIT 1;");
+        return this.blockForConnection().thenApplyAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("SELECT * FROM starboard WHERE original_author_id = ? LIMIT 1;");
             statement.setLong(1, userId);
             return statement.executeQuery().next();
         }, CompletionException::new), executorService);
     }
 
     public CompletableFuture<Collection<DatabaseRow>> removeBoardEntriesInChannel(final long channelId) {
-        return CompletableFuture.supplyAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> {
-            final PreparedStatement statement = this.connection.prepareStatement("DELETE FROM starboard WHERE original_channel_id = ? RETURNING *;");
+        return this.blockForConnection().thenApplyAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> {
+            final PreparedStatement statement = connection.prepareStatement("DELETE FROM starboard WHERE original_channel_id = ? RETURNING *;");
             statement.setLong(1, channelId);
             return DatabaseRow.all(statement.executeQuery(), ArrayList::new);
         }, CompletionException::new), executorService);
     }
 
     public CompletableFuture<Void> removeAllBoardEntries() {
-        return CompletableFuture.runAsync(() -> ExceptionUtil.wrap(SQLException.class, () -> this.connection.prepareStatement("DELETE FROM starboard;").executeUpdate(), CompletionException::new), executorService);
+        return this.blockForConnection().thenAcceptAsync(connection -> ExceptionUtil.wrap(SQLException.class, () -> connection.prepareStatement("DELETE FROM starboard;").executeUpdate(), CompletionException::new), executorService);
     }
 }

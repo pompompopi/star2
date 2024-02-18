@@ -8,6 +8,8 @@ import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.channel.ChannelType;
+import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.entities.emoji.UnicodeEmoji;
 import net.dv8tion.jda.api.events.channel.ChannelDeleteEvent;
@@ -87,7 +89,12 @@ public final class Star2 extends ListenerAdapter {
 
     @Override
     public void onMessageReactionAdd(final MessageReactionAddEvent event) {
-        if (starboardChannelId == event.getChannel().getIdLong())
+        final MessageChannelUnion channel = event.getChannel();
+        if (starboardChannelId == channel.getIdLong())
+            return;
+        if (!channel.getType().isGuild())
+            return;
+        if (channel.getType() == ChannelType.TEXT && channel.asTextChannel().isNSFW())
             return;
         if (isNotStar(event.getEmoji()))
             return;
@@ -102,7 +109,12 @@ public final class Star2 extends ListenerAdapter {
 
     @Override
     public void onMessageReactionRemove(final MessageReactionRemoveEvent event) {
-        if (starboardChannelId == event.getChannel().getIdLong())
+        final MessageChannelUnion channel = event.getChannel();
+        if (starboardChannelId == channel.getIdLong())
+            return;
+        if (!channel.getType().isGuild())
+            return;
+        if (channel.getType() == ChannelType.TEXT && channel.asTextChannel().isNSFW())
             return;
         if (isNotStar(event.getEmoji()))
             return;
@@ -123,7 +135,12 @@ public final class Star2 extends ListenerAdapter {
 
     @Override
     public void onMessageReactionRemoveEmoji(final MessageReactionRemoveEmojiEvent event) {
-        if (starboardChannelId == event.getChannel().getIdLong())
+        final MessageChannelUnion channel = event.getChannel();
+        if (starboardChannelId == channel.getIdLong())
+            return;
+        if (!channel.getType().isGuild())
+            return;
+        if (channel.getType() == ChannelType.TEXT && channel.asTextChannel().isNSFW())
             return;
         final Emoji emoji = event.getEmoji();
         if (emoji.getType() != Emoji.Type.UNICODE)
@@ -135,7 +152,12 @@ public final class Star2 extends ListenerAdapter {
 
     @Override
     public void onMessageReceived(final MessageReceivedEvent event) {
-        if (starboardChannelId == event.getChannel().getIdLong())
+        final MessageChannelUnion channel = event.getChannel();
+        if (starboardChannelId == channel.getIdLong())
+            return;
+        if (!channel.getType().isGuild())
+            return;
+        if (channel.getType() == ChannelType.TEXT && channel.asTextChannel().isNSFW())
             return;
         if (event.getAuthor().getIdLong() != ownerId)
             return;
@@ -156,7 +178,12 @@ public final class Star2 extends ListenerAdapter {
 
     @Override
     public void onMessageUpdate(final MessageUpdateEvent event) {
-        if (starboardChannelId == event.getChannel().getIdLong())
+        final MessageChannelUnion channel = event.getChannel();
+        if (starboardChannelId == channel.getIdLong())
+            return;
+        if (!channel.getType().isGuild())
+            return;
+        if (channel.getType() == ChannelType.TEXT && channel.asTextChannel().isNSFW())
             return;
         event.getChannel().retrieveMessageById(event.getMessageIdLong()).queue(message -> ExceptionUtil.handleExceptionAndLog(starboardChannelManager.updateWithoutCreatingEntry(message, message.getReferencedMessage(), (short) -1), "message update event handler"));
     }

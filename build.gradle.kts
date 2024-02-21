@@ -20,7 +20,7 @@ dependencies {
         exclude(module = "opus-java")
     }
     implementation("ch.qos.logback:logback-classic:1.4.14")
-    implementation("org.postgresql:postgresql:42.7.1")
+    implementation("org.postgresql:postgresql:42.7.2")
 }
 
 tasks {

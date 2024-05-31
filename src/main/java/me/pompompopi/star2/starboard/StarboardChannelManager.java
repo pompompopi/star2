@@ -33,7 +33,7 @@ public final class StarboardChannelManager {
     }
 
     private CompletableFuture<Void> createEntry(final Message message, final @Nullable Message referencedMessage, final short stars) {
-        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, referencedMessage, stars)).queue(starboardMessage -> ExceptionUtil.handleExceptionAndLog(databaseConnection.addBoardEntry(message.getIdLong(), message.getChannelIdLong(), message.getAuthor().getIdLong(), starboardMessage.getIdLong(), NullableUtil.mapFromPossiblyNull(referencedMessage, ISnowflake::getIdLong), NullableUtil.mapFromPossiblyNull(referencedMessage, referencedMessageAct -> referencedMessageAct.getAuthor().getIdLong()), stars), "create entry")));
+        return CompletableFuture.runAsync(() -> starboardChannel.sendMessageEmbeds(createEmbed(message, referencedMessage, stars)).queue(starboardMessage -> ExceptionUtil.handleExceptionAndLog(databaseConnection.addBoardEntry(message.getIdLong(), message.getChannel().getIdLong(), message.getAuthor().getIdLong(), starboardMessage.getIdLong(), NullableUtil.mapFromPossiblyNull(referencedMessage, ISnowflake::getIdLong), NullableUtil.mapFromPossiblyNull(referencedMessage, referencedMessageAct -> referencedMessageAct.getAuthor().getIdLong()), stars), "create entry")));
     }
 
     private CompletableFuture<Void> updateEntry(final Message message, final @Nullable Message referencedMessage, final short stars, final DatabaseRow databaseRow) {
@@ -147,8 +147,7 @@ public final class StarboardChannelManager {
                 .setTimestamp(message.getTimeEdited() == null ? message.getTimeCreated() : message.getTimeEdited())
                 .setAuthor(author.getName())
                 .setThumbnail(author.getEffectiveAvatarUrl())
-                .setTitle("Jump to Message")
-                .setUrl(message.getJumpUrl())
+                .setTitle("Jump to Message", message.getJumpUrl())
                 .setFooter(footer)
                 .setDescription(message.getContentRaw().trim());
 
